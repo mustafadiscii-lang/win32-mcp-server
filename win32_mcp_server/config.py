@@ -154,6 +154,38 @@ class SecurityConfig:
 
 
 @dataclass
+class RemoteConfig:
+    """Network transport configuration for remote clients (e.g. a phone MCP app)."""
+
+    enabled: bool = False
+    host: str = "127.0.0.1"
+    port: int = 8765
+    path: str = "/mcp/"
+    auth_token: str = ""
+    allow_no_auth: bool = False
+
+
+def _remote_config_from_env(defaults: RemoteConfig) -> RemoteConfig:
+    """Apply WIN32_MCP_REMOTE_* overrides to a RemoteConfig."""
+    path = _env_str("WIN32_MCP_REMOTE_PATH", defaults.path)
+    if not path.startswith("/"):
+        path = f"/{path}"
+    if not path.endswith("/"):
+        # Starlette 307-redirects a bare mount path to its trailing-slash form; normalizing
+        # here means every client hits the endpoint directly with no extra redirect hop.
+        path = f"{path}/"
+
+    return RemoteConfig(
+        enabled=_env_bool("WIN32_MCP_REMOTE_ENABLED", defaults.enabled),
+        host=_env_str("WIN32_MCP_REMOTE_HOST", defaults.host),
+        port=_env_int("WIN32_MCP_REMOTE_PORT", defaults.port, 1, 65_535),
+        path=path,
+        auth_token=_env_str("WIN32_MCP_REMOTE_TOKEN", defaults.auth_token),
+        allow_no_auth=_env_bool("WIN32_MCP_REMOTE_ALLOW_NO_AUTH", defaults.allow_no_auth),
+    )
+
+
+@dataclass
 class ServerConfig:
     """Top-level server configuration."""
 
@@ -162,6 +194,7 @@ class ServerConfig:
     automation: AutomationConfig = field(default_factory=AutomationConfig)
     limits: RuntimeLimits = field(default_factory=RuntimeLimits)
     security: SecurityConfig = field(default_factory=SecurityConfig)
+    remote: RemoteConfig = field(default_factory=RemoteConfig)
     validate_coordinates: bool = True
     default_timeout: float = 10.0
     window_retry_attempts: int = 3
@@ -280,6 +313,8 @@ class ServerConfig:
             "WIN32_MCP_REDACT_SENSITIVE_OUTPUT",
             cfg.security.redact_sensitive_output,
         )
+
+        cfg.remote = _remote_config_from_env(cfg.remote)
 
         return cfg
 
