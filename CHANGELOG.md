@@ -7,6 +7,10 @@ All notable changes to the **Windows Automation Inspector (MCP)** extension will
 ### Added
 - Added a manual and release-triggered PyPI publishing workflow using Trusted Publishing.
 - Hardened GitHub Actions by pinning action SHAs, reducing permissions, disabling checkout credential persistence, and validating PyPI publish refs.
+- Added an optional **Streamable HTTP** transport (`--http` / `WIN32_MCP_REMOTE_ENABLED`) so remote MCP clients — including phones and other devices on the network — can connect to the server, protected by a required `WIN32_MCP_REMOTE_TOKEN` bearer token.
+
+### Fixed
+- Pinned `mcp` to `<2.0.0`; the unpinned dependency resolved to the incompatible mcp 2.x line, which removed the low-level `Server.list_tools()`/`call_tool()` decorators this server relies on.
 
 ## [2.6.1] — 2026-05-18
 

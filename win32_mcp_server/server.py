@@ -11,12 +11,14 @@ GitHub: https://github.com/RandyNorthrup/win32-mcp-server
 
 import argparse
 import asyncio
+import contextlib
 import json
 import logging
 import platform
+import secrets
 import sys
-from collections.abc import Sequence
-from typing import Any
+from collections.abc import AsyncIterator, Sequence
+from typing import TYPE_CHECKING, Any
 
 from mcp.server import Server
 from mcp.types import ImageContent, TextContent, Tool
@@ -25,6 +27,9 @@ from . import __version__
 from .config import config
 from .registry import registry
 from .utils.security import redact_arguments, safe_json_dumps
+
+if TYPE_CHECKING:
+    from starlette.types import ASGIApp, Receive, Scope, Send
 
 # ---------------------------------------------------------------------------
 # Logging setup
@@ -188,11 +193,92 @@ async def async_main() -> None:
         )
 
 
+class _BearerAuthASGIMiddleware:
+    """Rejects HTTP requests that don't carry the configured bearer token.
+
+    Wraps the raw ASGI app instead of using Starlette's BaseHTTPMiddleware so the
+    underlying Streamable HTTP transport can stream SSE responses untouched.
+    """
+
+    def __init__(self, asgi_app: "ASGIApp", expected_header: str | None) -> None:
+        self._asgi_app = asgi_app
+        self._expected_header = expected_header
+
+    async def __call__(self, scope: "Scope", receive: "Receive", send: "Send") -> None:
+        if scope.get("type") != "http" or self._expected_header is None:
+            await self._asgi_app(scope, receive, send)
+            return
+
+        from starlette.responses import JSONResponse
+
+        headers = dict(scope.get("headers") or [])
+        provided = headers.get(b"authorization", b"").decode("latin-1")
+        if not secrets.compare_digest(provided, self._expected_header):
+            response = JSONResponse({"error": "unauthorized"}, status_code=401)
+            await response(scope, receive, send)
+            return
+
+        await self._asgi_app(scope, receive, send)
+
+
+async def async_main_http() -> None:
+    """Async entry point — serves Streamable HTTP for remote clients (e.g. a phone MCP app)."""
+    import uvicorn
+    from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
+    from starlette.applications import Starlette
+    from starlette.routing import Mount
+
+    remote = config.remote
+    if not remote.auth_token and not remote.allow_no_auth:
+        msg = (
+            "Refusing to start the remote HTTP transport without an auth token. "
+            "Set WIN32_MCP_REMOTE_TOKEN, or WIN32_MCP_REMOTE_ALLOW_NO_AUTH=true "
+            "to knowingly accept the risk on a trusted network."
+        )
+        raise RuntimeError(msg)
+
+    session_manager = StreamableHTTPSessionManager(app=app)
+    expected_header = f"Bearer {remote.auth_token}" if remote.auth_token else None
+    mcp_asgi_app = _BearerAuthASGIMiddleware(session_manager.handle_request, expected_header)
+
+    @contextlib.asynccontextmanager
+    async def lifespan(_: Starlette) -> AsyncIterator[None]:
+        async with session_manager.run():
+            yield
+
+    starlette_app = Starlette(routes=[Mount(remote.path, app=mcp_asgi_app)], lifespan=lifespan)
+
+    logger.info(
+        "win32-mcp-server v%s starting HTTP transport on http://%s:%d%s (%d tools registered)",
+        __version__,
+        remote.host,
+        remote.port,
+        remote.path,
+        len(registry.tool_names),
+    )
+    if expected_header is None:
+        logger.warning(
+            "Remote HTTP transport is running WITHOUT authentication. "
+            "Restrict this to a trusted network only.",
+        )
+
+    uvicorn_config = uvicorn.Config(starlette_app, host=remote.host, port=remote.port, log_level="warning")
+    await uvicorn.Server(uvicorn_config).serve()
+
+
 def _build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Windows Automation Inspector MCP server")
     parser.add_argument("--version", action="store_true", help="Print server version and exit")
     parser.add_argument("--list-tools", action="store_true", help="Print registered tool names as JSON and exit")
     parser.add_argument("--health-check", action="store_true", help="Run health_check once as JSON and exit")
+    parser.add_argument(
+        "--http",
+        action="store_true",
+        help="Serve over Streamable HTTP instead of stdio, for remote clients such as a phone MCP app "
+        "(see the WIN32_MCP_REMOTE_* environment variables)",
+    )
+    parser.add_argument("--host", type=str, default=None, help="Bind host for --http (default: 127.0.0.1)")
+    parser.add_argument("--port", type=int, default=None, help="Bind port for --http (default: 8765)")
     return parser
 
 
@@ -209,8 +295,14 @@ def main(argv: Sequence[str] | None = None) -> None:
         sys.stdout.write(f"{json.dumps(asyncio.run(handle_health_check({})), indent=2, default=str)}\n")
         return
 
+    if args.host is not None:
+        config.remote.host = args.host
+    if args.port is not None:
+        config.remote.port = args.port
+    use_http = args.http or config.remote.enabled
+
     try:
-        asyncio.run(async_main())
+        asyncio.run(async_main_http() if use_http else async_main())
     except KeyboardInterrupt:
         logger.info("Server stopped by user")
     except Exception as exc:

@@ -162,7 +162,41 @@ Add to `%APPDATA%\Claude\claude_desktop_config.json`:
 
 ### Any MCP Client
 
-The server uses **STDIO transport** and works with any MCP-compatible client.
+By default the server uses **STDIO transport** and works with any MCP-compatible client.
+
+### Remote Access (e.g. controlling your PC from your phone)
+
+The server can also serve **Streamable HTTP** instead of stdio, so an MCP client running
+on another device — a phone, tablet, or another computer on your network — can connect to
+it directly. Because this exposes full Windows control over the network, a bearer token is
+required unless you explicitly opt out.
+
+```powershell
+$env:WIN32_MCP_REMOTE_ENABLED = "true"
+$env:WIN32_MCP_REMOTE_TOKEN = "a-long-random-token"
+$env:WIN32_MCP_REMOTE_HOST = "0.0.0.0"   # bind to the LAN, not just localhost
+win32-mcp-server
+```
+
+Or, equivalently, without changing the environment:
+
+```powershell
+win32-mcp-server --http --host 0.0.0.0 --port 8765
+```
+
+Point the MCP client on your phone at `http://<your-pc-lan-ip>:8765/mcp/` (trailing slash
+required) with header `Authorization: Bearer a-long-random-token`. To reach the server from
+outside your LAN, put it behind a VPN or tunnel you control (e.g. Tailscale, WireGuard) rather
+than exposing the port directly on the internet.
+
+| Variable | Purpose |
+|----------|---------|
+| `WIN32_MCP_REMOTE_ENABLED` | Serve Streamable HTTP instead of stdio when the process starts (default: `false`) |
+| `WIN32_MCP_REMOTE_HOST` | Bind address (default: `127.0.0.1`; use `0.0.0.0` to accept LAN connections) |
+| `WIN32_MCP_REMOTE_PORT` | Bind port (default: `8765`) |
+| `WIN32_MCP_REMOTE_PATH` | HTTP mount path (default: `/mcp/`) |
+| `WIN32_MCP_REMOTE_TOKEN` | Bearer token required in the `Authorization` header of every request |
+| `WIN32_MCP_REMOTE_ALLOW_NO_AUTH` | Set `true` to start without a token on a network you fully trust (not recommended) |
 
 ### CLI Smoke Checks
 
@@ -398,6 +432,7 @@ The server can:
 4. **Require confirmation tokens** — set `WIN32_MCP_CONFIRMATION_TOKEN` for high-risk process/window actions
 5. **Review automation logs** — tool calls are logged with sensitive fields redacted
 6. **Restrict MCP client access** — only trusted clients should invoke this server
+7. **Never expose the remote HTTP transport to the open internet** — bind it to `127.0.0.1` or your LAN only, always set `WIN32_MCP_REMOTE_TOKEN`, and use a VPN/tunnel for access from outside your network
 
 ---
 

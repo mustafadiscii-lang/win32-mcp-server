@@ -28,7 +28,9 @@ classifiers = [
 ]
 
 dependencies = [
-    "mcp>=1.0.0",
+    "mcp>=1.8.0,<2.0.0",
+    "starlette>=0.27.0",
+    "uvicorn>=0.23.0",
     "mss>=10.0.0",
     "pillow>=10.0.0",
     "pyautogui>=0.9.54",
@@ -43,6 +45,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
+    "httpx>=0.27.0",
     "mypy>=1.10",
     "pytest>=8.0",
     "ruff>=0.12",
