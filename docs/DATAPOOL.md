@@ -19,8 +19,32 @@ OneDrive klasörü ──► win32-mcp-datapool index (paralel işçiler)
 
 ## 1. Kurulum (Windows)
 
+### Hızlı kurulum (tek komut)
+
+`scripts/datapool-kurulum.ps1` betiği aşağıdaki adımların hepsini sırayla yapar:
+
+1. Paketi kurar.
+2. OneDrive klasörünüzü bulur ve `WIN32_MCP_DATAPOOL_ROOTS` değişkenine yazar.
+3. ODA File Converter'ın kurulu olup olmadığını kontrol eder.
+4. Claude Desktop ayarına `win32` sunucusunu ekler. Mevcut ayarı önce yedekler ve diğer sunuculara dokunmaz.
+5. İlk taramayı çalıştırır.
+6. Her gece 02:00'de çalışacak bir "VeriHavuzu" görevi oluşturur.
+
+Yönetici yetkisi gerekmez.
+
 ```powershell
-pip install "win32-mcp-server[datapool]"
+powershell -ExecutionPolicy Bypass -File .\datapool-kurulum.ps1
+# Belirli klasörler, 6 işçi, yalnızca bulutta duran dosyaları da indir:
+powershell -ExecutionPolicy Bypass -File .\datapool-kurulum.ps1 -Roots "C:\Users\ben\OneDrive - Firma\Projeler" -Workers 6 -Hydrate
+```
+
+Betiği tekrar çalıştırmak güvenlidir, çünkü tarama artımlıdır. ODA'yı sonradan kurarsanız betiği
+`-SkipInstall` ile tekrar çalıştırın. Aşağıdaki bölümler aynı adımların elle nasıl yapılacağını anlatır.
+
+### Elle kurulum
+
+```powershell
+pip install "win32-mcp-server[datapool] @ git+https://github.com/mustafadiscii-lang/win32-mcp-server.git@claude/relaxed-curie-a0gfjy"
 ```
 
 **DWG içeriği için (önerilir):** Ücretsiz [ODA File Converter](https://www.opendesign.com/guestfiles/oda_file_converter)
@@ -40,7 +64,7 @@ DWG'ler kopyalanarak dönüştürülür. OneDrive'daki asıl dosyaya dokunulmaz 
 ## 2. İlk indeksleme
 
 ```powershell
-# OneDrive klasörlerinin tamamı (OneDrive / OneDriveCommercial otomatik bulunur)
+# WIN32_MCP_DATAPOOL_ROOTS'taki klasörler; değişken boşsa OneDrive / OneDriveCommercial otomatik bulunur
 win32-mcp-datapool index
 
 # Veya belirli klasörler, 6 paralel işçiyle

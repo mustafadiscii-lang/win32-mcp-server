@@ -15,12 +15,11 @@ Indexing only reads files under the allowed roots: ``WIN32_MCP_DATAPOOL_ROOTS``
 """
 
 import asyncio
-import os
 from pathlib import Path
 from typing import Any
 
 from ..datapool.classify import CATEGORIES
-from ..datapool.scanner import ScanOptions, onedrive_roots, scan
+from ..datapool.scanner import ScanOptions, configured_roots, scan
 from ..datapool.store import DataPool
 from ..registry import registry
 from ..utils.args import get_bool, get_int, get_str
@@ -30,10 +29,7 @@ MAX_INDEX_SECONDS = 150
 
 
 def allowed_roots() -> list[Path]:
-    env = os.getenv("WIN32_MCP_DATAPOOL_ROOTS", "").strip()
-    if env:
-        return [Path(p).expanduser().resolve() for p in env.split(";") if p.strip()]
-    return [p.resolve() for p in onedrive_roots()]
+    return configured_roots()
 
 
 def _resolve_roots(requested: list[str]) -> list[Path]:

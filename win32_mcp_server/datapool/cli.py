@@ -9,7 +9,7 @@ import sys
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from .scanner import DEFAULT_EXTENSIONS, ScanOptions, ScanReport, onedrive_roots, scan
+from .scanner import DEFAULT_EXTENSIONS, ScanOptions, ScanReport, configured_roots, scan
 from .store import DataPool, default_db_path
 
 if TYPE_CHECKING:
@@ -21,10 +21,11 @@ def _print_json(value: Any) -> None:
 
 
 def _cmd_index(args: argparse.Namespace, pool: DataPool) -> int:
-    roots = [Path(r) for r in args.roots] or onedrive_roots()
+    roots = [Path(r) for r in args.roots] or configured_roots()
     if not roots:
         sys.stderr.write(
-            "Klasor verilmedi ve OneDrive klasoru bulunamadi. Ornek: win32-mcp-datapool index D:\\Projeler\n"
+            "Klasor verilmedi; WIN32_MCP_DATAPOOL_ROOTS bos ve OneDrive klasoru bulunamadi. "
+            "Ornek: win32-mcp-datapool index D:\\Projeler\n"
         )
         return 2
     exts = frozenset(f".{e.lower().lstrip('.')}" for e in args.ext) if args.ext else DEFAULT_EXTENSIONS
@@ -90,7 +91,9 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", required=True)
 
     p_index = sub.add_parser("index", help="Klasorleri tara ve havuzu guncelle")
-    p_index.add_argument("roots", nargs="*", help="Taranacak klasorler (bos: OneDrive klasorleri)")
+    p_index.add_argument(
+        "roots", nargs="*", help="Taranacak klasorler (bos: WIN32_MCP_DATAPOOL_ROOTS, o da yoksa OneDrive)"
+    )
     p_index.add_argument("--workers", type=int, default=ScanOptions().workers, help="Paralel ajan/isci sayisi")
     p_index.add_argument("--ext", action="append", default=[], help="Sadece bu uzantilar (tekrarlanabilir)")
     p_index.add_argument("--hydrate", action="store_true", help="Sadece bulutta olan OneDrive dosyalarini indir")

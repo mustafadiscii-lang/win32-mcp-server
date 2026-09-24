@@ -55,6 +55,14 @@ def onedrive_roots() -> list[Path]:
     return seen
 
 
+def configured_roots() -> list[Path]:
+    """``WIN32_MCP_DATAPOOL_ROOTS`` (``;``-separated) or, when unset, the user's OneDrive folders."""
+    env = os.getenv("WIN32_MCP_DATAPOOL_ROOTS", "").strip()
+    if env:
+        return [Path(p).expanduser().resolve() for p in env.split(";") if p.strip()]
+    return [p.resolve() for p in onedrive_roots()]
+
+
 def is_cloud_only(st: os.stat_result) -> bool:
     """True for OneDrive placeholders whose bytes are not on disk (reading would download them)."""
     attrs = getattr(st, "st_file_attributes", 0)

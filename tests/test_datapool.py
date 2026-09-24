@@ -158,3 +158,12 @@ def test_cli_index_and_export(archive: Path, tmp_path: Path, capsys: pytest.Capt
     out = tmp_path / "pool.csv"
     assert cli_main(["--db", db, "export", str(out)]) == 0
     assert "Deniz Konutlari" in out.read_text(encoding="utf-8-sig")
+
+
+def test_cli_index_uses_configured_roots(
+    archive: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setenv("WIN32_MCP_DATAPOOL_ROOTS", str(archive))
+    db = str(tmp_path / "env.sqlite")
+    assert cli_main(["--db", db, "index", "--workers", "1", "-q"]) == 0
+    assert '"indexed": 5' in capsys.readouterr().out
