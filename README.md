@@ -94,6 +94,18 @@ The most comprehensive Windows desktop automation server for the [Model Context 
 - `uia_set_control_value` — set a control's value (edit boxes, etc.)
 - `uia_get_focused` — get info about the currently focused control
 
+### Data Pool (7 tools)
+Index a local/OneDrive project archive (DWG/DXF drawings, PDFs, Office files, survey data) into a
+local SQLite full-text pool that agents can search and annotate. Install with
+`pip install "win32-mcp-server[datapool]"`; DWG content needs the free ODA File Converter.
+Also ships a `win32-mcp-datapool` CLI (`index`, `search`, `show`, `stats`, `projects`, `export`).
+See [docs/DATAPOOL.md](docs/DATAPOOL.md) (Turkish).
+
+- `datapool_index` — incremental, parallel scan of allowed roots (`WIN32_MCP_DATAPOOL_ROOTS`, default OneDrive)
+- `datapool_search` / `datapool_get` — full-text search and full record (layers, title block, text)
+- `datapool_stats` / `datapool_projects` — totals and per-project summaries
+- `datapool_pending_reviews` / `datapool_annotate` — agent review queue and saved reviews
+
 ---
 
 ## Installation

@@ -5,6 +5,9 @@ All notable changes to the **Windows Automation Inspector (MCP)** extension will
 ## [Unreleased]
 
 ### Added
+- Data pool: `win32_mcp_server.datapool` indexes DWG/DXF (via ODA File Converter + ezdxf), PDF, DOCX, PPTX, XLSX and text data files from OneDrive or local folders into a SQLite FTS5 pool, auto-classified as proje / etut_plani / teklif_sunumu / veri.
+- Seven `datapool_*` MCP tools for indexing, searching, and agent reviews, restricted to `WIN32_MCP_DATAPOOL_ROOTS`.
+- `win32-mcp-datapool` CLI with parallel workers and a `datapool` optional dependency extra.
 - Added a manual and release-triggered PyPI publishing workflow using Trusted Publishing.
 - Hardened GitHub Actions by pinning action SHAs, reducing permissions, disabling checkout credential persistence, and validating PyPI publish refs.
 

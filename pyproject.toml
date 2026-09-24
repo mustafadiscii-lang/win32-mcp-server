@@ -42,7 +42,13 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+datapool = [
+    "ezdxf>=1.1",
+    "pypdf>=4.0",
+]
 dev = [
+    "ezdxf>=1.1",
+    "pypdf>=4.0",
     "mypy>=1.10",
     "pytest>=8.0",
     "ruff>=0.12",
@@ -57,6 +63,7 @@ Documentation = "https://github.com/RandyNorthrup/win32-mcp-server#readme"
 
 [project.scripts]
 win32-mcp-server = "win32_mcp_server:main"
+win32-mcp-datapool = "win32_mcp_server.datapool.cli:entry_point"
 
 [project.entry-points."mcp.servers"]
 win32-inspector = "win32_mcp_server:main"
@@ -156,6 +163,10 @@ ignore = [
 "win32_mcp_server/tools/uia.py" = ["ARG001", "S110", "SIM105", "PERF401"]
 "win32_mcp_server/server.py" = ["ARG001", "E402"]
 "tests/*.py" = ["S101", "SLF001", "S106"]
+# Turkish text (dotless ı) is intentional in the data pool keywords, docs and tests
+"win32_mcp_server/datapool/*.py" = ["RUF001", "RUF002", "RUF003"]
+"win32_mcp_server/tools/datapool.py" = ["ARG001", "RUF001"]
+"tests/test_datapool.py" = ["S101", "RUF001"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["win32_mcp_server"]
@@ -204,5 +215,9 @@ module = [
     "uiautomation.*",
     "comtypes",
     "comtypes.*",
+    "ezdxf",
+    "ezdxf.*",
+    "pypdf",
+    "pypdf.*",
 ]
 ignore_missing_imports = true
