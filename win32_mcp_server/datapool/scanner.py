@@ -12,8 +12,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from .classify import classify, extract_fields, project_key
-from .extractors import extract, find_oda_converter
-from .store import DataPool, FileRecord
+from .extractors import NO_ODA_ERROR, extract, find_oda_converter
+from .store import DataPool, FileRecord, StoredState
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator, Sequence
@@ -37,6 +37,9 @@ DEFAULT_EXTENSIONS = frozenset(
 )
 SKIP_DIRS = frozenset({".git", "__pycache__", "node_modules", "$recycle.bin", ".tmp.drivedownload", ".tmp.driveupload"})
 MAX_FILE_BYTES = 500 * 1024 * 1024
+# Partial extractions caused by something other than a missing converter (locked file, ODA timeout,
+# offline OneDrive file...) may be temporary; retry them after this long.
+PARTIAL_RETRY_SECONDS = 24 * 3600
 
 # Windows file attributes set on OneDrive "files on demand" placeholders.
 _FILE_ATTRIBUTE_OFFLINE = 0x1000
@@ -85,9 +88,7 @@ class ScanOptions:
     project_depth: int = 1
     use_processes: bool = True
     oda_converter: str | None = None
-    # Re-extract records stored as "partial" (e.g. after installing ODA File Converter).
-    retry_partial: bool = False
-    # Allowed roots: rel_path/project are computed against the one containing the scanned folder,
+    # Allowed roots: rel_path/project are computed against the deepest one containing each file,
     # so scanning a sub-folder gives the same records as scanning the whole root.
     base_roots: tuple[Path, ...] = ()
 
@@ -164,6 +165,9 @@ def iter_files(
                         yield Path(entry.path), entry.stat(follow_symlinks=False)
                     except OSError as exc:
                         logger.warning("Cannot stat %s: %s", entry.path, exc)
+                        if errors is not None:
+                            # Might be a folder we could not inspect; treat the walk as incomplete.
+                            errors.append(entry.path)
         except OSError as exc:
             logger.warning("Cannot list %s: %s", current, exc)
             if errors is not None:
@@ -246,7 +250,7 @@ def scan(
                 report.missing_roots.append(str(root))
                 continue
             report.roots.append(str(root))
-            _scan_root(run, root, _base_for(root, bases))
+            _scan_root(run, root, bases)
             if report.stopped_early:
                 break
     finally:
@@ -268,7 +272,7 @@ class _Run:
     submitted: int = 0
 
 
-def _scan_root(run: _Run, root: Path, base: Path) -> None:
+def _scan_root(run: _Run, root: Path, bases: Sequence[Path]) -> None:
     """Walk one root, extract changed files and prune records of files that disappeared."""
     opts, report = run.opts, run.report
     seen_paths: set[str] = set()
@@ -288,8 +292,10 @@ def _scan_root(run: _Run, root: Path, base: Path) -> None:
         if st.st_size > MAX_FILE_BYTES:
             report.skipped_large += 1
             continue
+        base = _base_for(path, bases, root)
         cloud = is_cloud_only(st) and not opts.hydrate
-        if not opts.force and _is_current(run.pool.stored_status(str(path), st.st_size, st.st_mtime), cloud, opts):
+        state = None if opts.force else run.pool.stored_state(str(path), st.st_size, st.st_mtime)
+        if _is_current(state, cloud, str(base), run.oda):
             report.unchanged += 1
             continue
         job = _Job(path, base, path.relative_to(base).as_posix(), st.st_size, st.st_mtime, cloud)
@@ -315,26 +321,32 @@ def _scan_root(run: _Run, root: Path, base: Path) -> None:
         complete = False
     if opts.prune and complete:
         with run.pool.transaction():
-            report.pruned += run.pool.prune(str(root), seen_paths)
+            report.pruned += run.pool.prune(str(root), seen_paths, opts.extensions)
 
 
-def _base_for(root: Path, bases: Sequence[Path]) -> Path:
-    """The deepest allowed root that contains ``root`` (``root`` itself when none does)."""
-    containing = [b for b in bases if b == root or b in root.parents]
-    return max(containing, key=lambda b: len(b.parts)) if containing else root
+def _base_for(path: Path, bases: Sequence[Path], fallback: Path) -> Path:
+    """The deepest allowed root containing ``path``, so a file gets the same rel_path/project
+    whichever folder was scanned; ``fallback`` (the scanned folder) when no allowed root contains it."""
+    containing = [b for b in bases if b in path.parents]
+    return max(containing, key=lambda b: len(b.parts)) if containing else fallback
 
 
-def _is_current(status: str | None, cloud_only_now: bool, opts: ScanOptions) -> bool:
+def _is_current(state: StoredState | None, cloud_only_now: bool, root: str, oda: str | None) -> bool:
     """Whether a stored record with matching size/mtime can be skipped.
 
-    "partial" and "cloud_only" records are skipped too, otherwise every call would re-process the same
-    files and ``max_files`` would never let the scan move past them.
+    "partial" and "cloud_only" records are normally skipped too, otherwise every call would re-process
+    the same files and ``max_files`` would never let the scan move past them. They are retried only
+    when retrying can give a different result.
     """
-    if status is None:
+    if state is None:
         return False
-    if status == "partial":
-        return not opts.retry_partial
-    if status == "cloud_only":
+    if state.root != root:
+        return False  # indexed under another root (or by an older version): refresh rel_path/project
+    if state.status == "partial":
+        if state.error == NO_ODA_ERROR:
+            return not oda  # ODA File Converter has been installed since
+        return time.time() - state.indexed_at < PARTIAL_RETRY_SECONDS
+    if state.status == "cloud_only":
         return cloud_only_now  # re-read once the file is available locally (or hydrate is on)
     return True
 
@@ -353,15 +365,18 @@ def _drain(
 ) -> None:
     if not futures:
         return
+    # Wait for every worker before opening the write transaction, so other connections (e.g. an
+    # agent annotating a file) are not blocked while slow extractions run.
+    records: list[FileRecord] = []
+    for fut in futures:
+        try:
+            records.append(fut.result())
+        except Exception as exc:
+            report.errors += 1
+            if len(report.error_samples) < 20:
+                report.error_samples.append({"error": f"{type(exc).__name__}: {exc}"})
     with pool.transaction():
-        for fut in futures:
-            try:
-                rec = fut.result()
-            except Exception as exc:
-                report.errors += 1
-                if len(report.error_samples) < 20:
-                    report.error_samples.append({"error": f"{type(exc).__name__}: {exc}"})
-                continue
+        for rec in records:
             pool.upsert(rec)
             if rec.status == "cloud_only":
                 report.cloud_only += 1

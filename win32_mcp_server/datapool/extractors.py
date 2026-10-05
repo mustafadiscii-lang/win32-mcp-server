@@ -27,6 +27,7 @@ from typing import Any
 MAX_TEXT_CHARS = 200_000
 MAX_ZIP_MEMBER_BYTES = 50 * 1024 * 1024
 MAX_ZIP_TOTAL_BYTES = 200 * 1024 * 1024
+NO_ODA_ERROR = "ODA File Converter bulunamadi; yalnizca baslik bilgisi indekslendi"
 MAX_PDF_PAGES = 60
 MAX_PLAIN_BYTES = 2 * 1024 * 1024
 ODA_TIMEOUT_SECONDS = 180
@@ -152,7 +153,7 @@ def extract_dwg(path: Path, *, oda_converter: str | None = None) -> Extraction:
         return Extraction(
             doc_type="dwg",
             meta={**meta, "content": "header_only"},
-            error="ODA File Converter bulunamadi; yalnizca baslik bilgisi indekslendi",
+            error=NO_ODA_ERROR,
         )
 
     with tempfile.TemporaryDirectory(prefix="datapool_dwg_") as tmp:

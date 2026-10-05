@@ -138,9 +138,6 @@ def test_scan_search_annotate_roundtrip(archive: Path, tmp_path: Path) -> None:
         assert again.unchanged == 5
         assert again.indexed == 0
 
-        retry = scan(pool, [archive], ScanOptions(workers=1, use_processes=False, oda_converter="", retry_partial=True))
-        assert retry.indexed == 1  # only the partial DWG is re-extracted
-
         (archive / "Teklifler" / "2024_otel_sunumu.pptx").unlink()
         third = scan(pool, [archive], ScanOptions(workers=1, use_processes=False, oda_converter=""))
         assert third.pruned == 1
@@ -265,3 +262,52 @@ def test_pptx_total_size_cap(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) ->
     assert "Birinci" in result.text
     assert "Ucuncu" not in result.text
     assert "boyut siniri" in result.text
+
+
+def test_partial_records_are_retried_only_when_useful() -> None:
+    import time
+
+    from win32_mcp_server.datapool.extractors import NO_ODA_ERROR
+    from win32_mcp_server.datapool.scanner import PARTIAL_RETRY_SECONDS, _is_current
+    from win32_mcp_server.datapool.store import StoredState
+
+    now = time.time()
+    no_oda = StoredState("partial", "/r", NO_ODA_ERROR, now)
+    assert _is_current(no_oda, False, "/r", None)  # still no converter: skip
+    assert not _is_current(no_oda, False, "/r", "/opt/oda")  # converter installed: retry
+
+    locked = StoredState("partial", "/r", "PermissionError: kilitli", now)
+    assert _is_current(locked, False, "/r", "/opt/oda")
+    old = StoredState("partial", "/r", "PermissionError: kilitli", now - PARTIAL_RETRY_SECONDS - 1)
+    assert not _is_current(old, False, "/r", "/opt/oda")
+
+    assert _is_current(StoredState("cloud_only", "/r", "", now), True, "/r", None)
+    assert not _is_current(StoredState("cloud_only", "/r", "", now), False, "/r", None)
+    assert not _is_current(StoredState("ok", "/eski", "", now), False, "/r", None)  # root changed
+
+
+def test_ext_limited_scan_keeps_other_records(archive: Path, tmp_path: Path) -> None:
+    opts = ScanOptions(workers=1, use_processes=False, oda_converter="")
+    with DataPool(tmp_path / "pool.sqlite") as pool:
+        scan(pool, [archive], opts)
+        etut = pool.search("sondaj")[0]
+        with pool.transaction():
+            pool.annotate(etut["id"], summary="incelendi")
+        dwg_only = ScanOptions(workers=1, use_processes=False, oda_converter="", extensions=frozenset({".dwg"}))
+        report = scan(pool, [archive], dwg_only)
+        assert report.pruned == 0
+        assert pool.stats()["files"] == 5
+        assert pool.get(etut["id"])["summary"] == "incelendi"  # type: ignore[index]
+
+        (archive / "Deniz Konutlari" / "eski.dwg").unlink()
+        assert scan(pool, [archive], dwg_only).pruned == 1
+
+
+def test_records_from_another_root_are_refreshed(archive: Path, tmp_path: Path) -> None:
+    sub = archive / "Deniz Konutlari"
+    with DataPool(tmp_path / "pool.sqlite") as pool:
+        scan(pool, [sub], ScanOptions(workers=1, use_processes=False, oda_converter=""))
+        assert pool.search("sondaj")[0]["project"] == "Zemin Etüdü"
+        report = scan(pool, [sub], ScanOptions(workers=1, use_processes=False, oda_converter="", base_roots=(archive,)))
+        assert report.unchanged == 0
+        assert pool.search("sondaj")[0]["project"] == "Deniz Konutlari"

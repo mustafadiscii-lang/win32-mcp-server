@@ -15,6 +15,7 @@ Indexing only reads files under the allowed roots: ``WIN32_MCP_DATAPOOL_ROOTS``
 """
 
 import asyncio
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -26,6 +27,7 @@ from ..utils.args import get_bool, get_int, get_str
 from ..utils.errors import ToolError
 
 MAX_INDEX_SECONDS = 150
+_INDEX_LOCK = threading.Lock()
 
 
 def allowed_roots() -> list[Path]:
@@ -81,10 +83,15 @@ _CATEGORY_SCHEMA = {"type": "string", "enum": ["", *CATEGORIES], "description": 
             "time_budget_seconds": {"type": "integer", "minimum": 5, "maximum": MAX_INDEX_SECONDS},
             "workers": {"type": "integer", "minimum": 1, "maximum": 16, "description": "Parallel workers"},
             "hydrate": {"type": "boolean", "description": "Download cloud-only OneDrive files to read them"},
-            "force": {"type": "boolean", "description": "Re-extract files even if unchanged"},
-            "retry_partial": {
+            "force": {
                 "type": "boolean",
-                "description": "Re-extract files indexed only partially (e.g. DWGs before ODA was installed)",
+                "description": "Re-extract files even if unchanged (repeats every call; do not loop on stopped_early)",
+            },
+            "project_depth": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 5,
+                "description": "Folder levels under the allowed root that name a project (default 1)",
             },
         },
     },
@@ -100,15 +107,25 @@ async def handle_datapool_index(arguments: dict[str, Any]) -> dict[str, Any]:
         workers=get_int(arguments, "workers", default=ScanOptions().workers, min_value=1, max_value=16),
         hydrate=get_bool(arguments, "hydrate", default=False),
         force=get_bool(arguments, "force", default=False),
-        retry_partial=get_bool(arguments, "retry_partial", default=False),
+        project_depth=get_int(arguments, "project_depth", default=1, min_value=1, max_value=5),
         base_roots=tuple(allowed_roots()),
         # Threads keep child processes away from the MCP stdio pipes.
         use_processes=False,
     )
 
     def _run() -> dict[str, Any]:
-        with DataPool() as pool:
-            return scan(pool, roots, opts).as_dict()
+        # A timed-out call leaves its worker thread running; refuse to start a second, overlapping
+        # scan (they would prune each other's fresh records) until that one has finished.
+        if not _INDEX_LOCK.acquire(blocking=False):
+            raise ToolError(
+                "A data pool scan is already running",
+                suggestion="Wait for it to finish, then call datapool_index again",
+            )
+        try:
+            with DataPool() as pool:
+                return scan(pool, roots, opts).as_dict()
+        finally:
+            _INDEX_LOCK.release()
 
     return await asyncio.to_thread(_run)
 

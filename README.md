@@ -351,6 +351,17 @@ Set these in your MCP client's server environment when you need production contr
 | `uia_set_control_value` | Set a control's value |
 | `uia_get_focused` | Get info about the focused control |
 
+### Data Pool
+| Tool | Description |
+|------|-------------|
+| `datapool_index` | Incremental scan of the allowed roots into the local pool |
+| `datapool_stats` | Totals by category, extension and status |
+| `datapool_projects` | Per-project file, drawing, etüt, teklif and veri counts |
+| `datapool_search` | Full-text search with category / project / extension filters |
+| `datapool_get` | One record: metadata, extracted text and agent review |
+| `datapool_pending_reviews` | Files no agent has reviewed yet |
+| `datapool_annotate` | Save an agent's summary, tags and category for a file |
+
 ---
 
 ## Architecture

@@ -57,8 +57,9 @@ setx WIN32_MCP_ODA_CONVERTER "D:\Araclar\ODAFileConverter\ODAFileConverter.exe"
 
 ODA yoksa DWG dosyaları yine indekslenir, ancak yalnızca sürüm (AutoCAD 2018 vb.), boyut,
 tarih ve klasör/dosya adı bilgisiyle. Bu dosyaların durumu `partial` olur. ODA'yı sonradan
-kurarsanız bu dosyaları yeniden işlemek için taramayı bir kez `--retry-partial` ile çalıştırın
-(MCP aracında `retry_partial: true`). Normal taramalar değişmemiş `partial` dosyaları atlar.
+kurarsanız sonraki taramada bu dosyalar kendiliğinden yeniden işlenir. Başka bir nedenle yarım
+kalan dosyalar (kilitli dosya, ODA zaman aşımı, indirilemeyen OneDrive dosyası) 24 saatte bir
+yeniden denenir; arada yapılan taramalar onları atlar.
 
 DWG'ler kopyalanarak dönüştürülür. OneDrive'daki asıl dosyaya dokunulmaz ve dosya kilitlenmez.
 
@@ -79,9 +80,14 @@ win32-mcp-datapool index "C:\Users\ben\OneDrive - Firma\Projeler" "C:\Users\ben\
 | `--workers N` | Paralel işçi sayısı (varsayılan: çekirdek sayısı − 1, en fazla 4) |
 | `--hydrate` | *Yalnızca çevrimiçi* (bulut simgeli) OneDrive dosyalarını indirip okur. Bu seçenek verilmezse bu dosyalar `cloud_only` olarak yalnızca adıyla kaydedilir |
 | `--project-depth 2` | Proje adını ilk 2 klasör seviyesinden üretir (ör. `2024/Deniz Konutları`) |
-| `--ext dwg --ext pdf` | Yalnızca bu uzantıları tarar |
+
+Proje adı, kökün altındaki klasörlerden üretilir. Komut satırında klasör verilirse kök o
+klasördür; klasör verilmezse `WIN32_MCP_DATAPOOL_ROOTS` içindeki kökler kullanılır. MCP aracı her
+zaman izin verilen kökleri esas alır, alt klasör tarasanız da proje adı değişmez; kök tüm OneDrive
+ise `project_depth: 2` verin ya da `WIN32_MCP_DATAPOOL_ROOTS` değişkenini proje klasörünüze
+(ör. `...\OneDrive\Projeler`) ayarlayın.
+| `--ext dwg --ext pdf` | Yalnızca bu uzantıları tarar; silinen dosya temizliği de yalnızca bu uzantılara uygulanır |
 | `--force` | Değişmemiş dosyaları da yeniden işler |
-| `--retry-partial` | Yalnızca yarım işlenmiş (`partial`) dosyaları yeniden işler; ODA kurulduktan sonra kullanılır |
 | `--max-files N` | Bir çalışmada en fazla N dosya işler (büyük arşivi parça parça taramak için) |
 
 Tarama artımlıdır: sonraki çalıştırmalar yalnızca yeni veya değişmiş dosyaları işler. Silinen

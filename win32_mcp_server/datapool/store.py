@@ -73,6 +73,14 @@ def default_db_path() -> Path:
 
 
 @dataclass
+class StoredState:
+    status: str
+    root: str
+    error: str
+    indexed_at: float
+
+
+@dataclass
 class FileRecord:
     path: str
     root: str
@@ -129,11 +137,13 @@ class DataPool:
     # Writes
     # ------------------------------------------------------------------
 
-    def stored_status(self, path: str, size: int, mtime: float) -> str | None:
-        """Status of the stored record when it still matches size/mtime, else None (needs indexing)."""
-        row = self.conn.execute("SELECT size, mtime, status FROM files WHERE path = ?", (path,)).fetchone()
+    def stored_state(self, path: str, size: int, mtime: float) -> StoredState | None:
+        """The stored record's state when it still matches size/mtime, else None (needs indexing)."""
+        row = self.conn.execute(
+            "SELECT size, mtime, status, root, error, indexed_at FROM files WHERE path = ?", (path,)
+        ).fetchone()
         if row and row["size"] == size and abs(row["mtime"] - mtime) < 1e-3:
-            return str(row["status"])
+            return StoredState(row["status"], row["root"], row["error"] or "", row["indexed_at"])
         return None
 
     def upsert(self, rec: FileRecord) -> int:
@@ -207,17 +217,21 @@ class DataPool:
         )
         self._refresh_fts(file_id)
 
-    def prune(self, scanned_dir: str, seen_paths: set[str]) -> int:
+    def prune(self, scanned_dir: str, seen_paths: set[str], extensions: Iterable[str] | None = None) -> int:
         """Delete records for files under ``scanned_dir`` that were not seen in the latest scan.
 
         Matching is by path prefix, so a scan of a sub-folder only prunes that sub-folder, whatever
-        root the records were stored under.
+        root the records were stored under. With ``extensions`` only records of those extensions are
+        candidates, because a scan limited to some extensions never "sees" the other files.
         """
         prefix = scanned_dir.rstrip("\\/") + os.sep
         rows = self.conn.execute(
-            "SELECT id, path FROM files WHERE substr(path, 1, ?) = ?", (len(prefix), prefix)
+            "SELECT id, path, ext FROM files WHERE substr(path, 1, ?) = ?", (len(prefix), prefix)
         ).fetchall()
-        stale = [row["id"] for row in rows if row["path"] not in seen_paths]
+        allowed = {e.lower() for e in extensions} if extensions is not None else None
+        stale = [
+            row["id"] for row in rows if row["path"] not in seen_paths and (allowed is None or row["ext"] in allowed)
+        ]
         for file_id in stale:
             self.conn.execute("DELETE FROM files_fts WHERE rowid = ?", (file_id,))
             self.conn.execute("DELETE FROM files WHERE id = ?", (file_id,))
