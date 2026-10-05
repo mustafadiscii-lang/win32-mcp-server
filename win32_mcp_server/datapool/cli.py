@@ -38,6 +38,8 @@ def _cmd_index(args: argparse.Namespace, pool: DataPool) -> int:
         max_files=args.max_files,
         project_depth=args.project_depth,
         oda_converter=args.oda,
+        retry_partial=args.retry_partial,
+        base_roots=tuple(configured_roots()),
     )
 
     def progress(report: ScanReport, rel_path: str) -> None:
@@ -98,6 +100,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_index.add_argument("--ext", action="append", default=[], help="Sadece bu uzantilar (tekrarlanabilir)")
     p_index.add_argument("--hydrate", action="store_true", help="Sadece bulutta olan OneDrive dosyalarini indir")
     p_index.add_argument("--force", action="store_true", help="Degismemis dosyalari da yeniden isle")
+    p_index.add_argument(
+        "--retry-partial",
+        action="store_true",
+        help="Yarim islenmis dosyalari (ornegin ODA kurulmadan once taranan DWG'ler) yeniden isle",
+    )
     p_index.add_argument("--no-prune", action="store_true", help="Silinmis dosyalarin kayitlarini tutmaya devam et")
     p_index.add_argument("--max-files", type=int, default=0, help="Bu calismada en fazla N dosya isle")
     p_index.add_argument("--project-depth", type=int, default=1, help="Proje adi icin kac klasor seviyesi")

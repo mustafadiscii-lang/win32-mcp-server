@@ -1,6 +1,6 @@
 # Win32 MCP Server
 
-**Enterprise-grade Windows automation for AI agents — 53 tools over MCP**
+**Enterprise-grade Windows automation for AI agents — 60 tools over MCP**
 
 The most comprehensive Windows desktop automation server for the [Model Context Protocol](https://modelcontextprotocol.io/). Give any MCP-compatible AI agent full control over Windows applications: intelligent text finding and clicking, structured OCR, screenshot capture, mouse/keyboard input, window management, process control, and multi-step batch operations — all through a single MCP server.
 
@@ -256,7 +256,7 @@ Set these in your MCP client's server environment when you need production contr
 
 ---
 
-## All 53 Tools
+## All 60 Tools
 
 ### Smart Automation
 | Tool | Description |

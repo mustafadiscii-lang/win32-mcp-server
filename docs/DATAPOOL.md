@@ -44,7 +44,7 @@ Betiği tekrar çalıştırmak güvenlidir, çünkü tarama artımlıdır. ODA'y
 ### Elle kurulum
 
 ```powershell
-pip install "win32-mcp-server[datapool] @ git+https://github.com/mustafadiscii-lang/win32-mcp-server.git@claude/relaxed-curie-a0gfjy"
+pip install "win32-mcp-server[datapool] @ git+https://github.com/mustafadiscii-lang/win32-mcp-server.git"
 ```
 
 **DWG içeriği için (önerilir):** Ücretsiz [ODA File Converter](https://www.opendesign.com/guestfiles/oda_file_converter)
@@ -57,7 +57,8 @@ setx WIN32_MCP_ODA_CONVERTER "D:\Araclar\ODAFileConverter\ODAFileConverter.exe"
 
 ODA yoksa DWG dosyaları yine indekslenir, ancak yalnızca sürüm (AutoCAD 2018 vb.), boyut,
 tarih ve klasör/dosya adı bilgisiyle. Bu dosyaların durumu `partial` olur. ODA'yı sonradan
-kurarsanız sonraki taramada bu dosyalar yeniden işlenir.
+kurarsanız bu dosyaları yeniden işlemek için taramayı bir kez `--retry-partial` ile çalıştırın
+(MCP aracında `retry_partial: true`). Normal taramalar değişmemiş `partial` dosyaları atlar.
 
 DWG'ler kopyalanarak dönüştürülür. OneDrive'daki asıl dosyaya dokunulmaz ve dosya kilitlenmez.
 
@@ -80,10 +81,12 @@ win32-mcp-datapool index "C:\Users\ben\OneDrive - Firma\Projeler" "C:\Users\ben\
 | `--project-depth 2` | Proje adını ilk 2 klasör seviyesinden üretir (ör. `2024/Deniz Konutları`) |
 | `--ext dwg --ext pdf` | Yalnızca bu uzantıları tarar |
 | `--force` | Değişmemiş dosyaları da yeniden işler |
+| `--retry-partial` | Yalnızca yarım işlenmiş (`partial`) dosyaları yeniden işler; ODA kurulduktan sonra kullanılır |
 | `--max-files N` | Bir çalışmada en fazla N dosya işler (büyük arşivi parça parça taramak için) |
 
 Tarama artımlıdır: sonraki çalıştırmalar yalnızca yeni veya değişmiş dosyaları işler. Silinen
-dosyaların kayıtları da havuzdan temizlenir. Görev Zamanlayıcı'ya gece çalışacak bir görev
+dosyaların kayıtları da havuzdan temizlenir. Bir klasör okunamazsa (izin, ağ veya OneDrive hatası)
+o taramada hiçbir kayıt silinmez. Bağlantı noktası (junction) ve sembolik bağlantılar izlenmez. Görev Zamanlayıcı'ya gece çalışacak bir görev
 eklemek yeterlidir:
 
 ```powershell

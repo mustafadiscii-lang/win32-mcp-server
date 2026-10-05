@@ -26,6 +26,7 @@ from typing import Any
 
 MAX_TEXT_CHARS = 200_000
 MAX_ZIP_MEMBER_BYTES = 50 * 1024 * 1024
+MAX_ZIP_TOTAL_BYTES = 200 * 1024 * 1024
 MAX_PDF_PAGES = 60
 MAX_PLAIN_BYTES = 2 * 1024 * 1024
 ODA_TIMEOUT_SECONDS = 180
@@ -282,7 +283,13 @@ def extract_pptx(path: Path) -> Extraction:
             key=lambda n: int(re.sub(r"\D", "", n.rsplit("/", 1)[-1])),
         )
         parts = []
+        total = 0
         for idx, name in enumerate(slides, start=1):
+            total += zf.getinfo(name).file_size
+            if total > MAX_ZIP_TOTAL_BYTES:
+                # Guard against decks (or zip bombs) whose slides add up to an unreasonable size.
+                parts.append(f"[{len(slides) - idx + 1} slayt boyut siniri nedeniyle okunmadi]")
+                break
             xml = _read_member(zf, name)
             body = "\n".join(_texts(_A_TEXT, para) for para in _PARAGRAPH_END.split(xml))
             parts.append(f"[Slayt {idx}]\n{_squash(body)}")

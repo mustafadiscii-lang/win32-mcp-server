@@ -6,7 +6,7 @@ import logging
 import os
 import stat
 import time
-from concurrent.futures import Executor, Future, ProcessPoolExecutor, ThreadPoolExecutor
+from concurrent.futures import BrokenExecutor, Executor, Future, ProcessPoolExecutor, ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -43,6 +43,10 @@ _FILE_ATTRIBUTE_OFFLINE = 0x1000
 _FILE_ATTRIBUTE_RECALL_ON_OPEN = 0x40000
 _FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS = 0x400000
 _CLOUD_ONLY_MASK = _FILE_ATTRIBUTE_OFFLINE | _FILE_ATTRIBUTE_RECALL_ON_OPEN | _FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS
+# Reparse tags that redirect a directory elsewhere (junction / directory symlink). OneDrive's own
+# cloud reparse tags are deliberately not listed: OneDrive folders must still be walked.
+_IO_REPARSE_TAG_MOUNT_POINT = 0xA0000003
+_IO_REPARSE_TAG_SYMLINK = 0xA000000C
 
 
 def onedrive_roots() -> list[Path]:
@@ -81,6 +85,11 @@ class ScanOptions:
     project_depth: int = 1
     use_processes: bool = True
     oda_converter: str | None = None
+    # Re-extract records stored as "partial" (e.g. after installing ODA File Converter).
+    retry_partial: bool = False
+    # Allowed roots: rel_path/project are computed against the one containing the scanned folder,
+    # so scanning a sub-folder gives the same records as scanning the whole root.
+    base_roots: tuple[Path, ...] = ()
 
 
 @dataclass
@@ -93,6 +102,8 @@ class ScanReport:
     errors: int = 0
     pruned: int = 0
     skipped_large: int = 0
+    unreadable_dirs: int = 0
+    missing_roots: list[str] = field(default_factory=list)
     stopped_early: bool = False
     elapsed_seconds: float = 0.0
     oda_converter: str | None = None
@@ -112,8 +123,24 @@ class _Job:
     cloud_only: bool
 
 
-def iter_files(root: Path, extensions: frozenset[str]) -> Iterator[tuple[Path, os.stat_result]]:
-    """Yield (path, stat) for matching files without following symlinks/junctions."""
+def _is_redirect(entry: os.DirEntry[str]) -> bool:
+    """True for symlinks and Windows junctions, which ``is_dir(follow_symlinks=False)`` still reports as dirs."""
+    if entry.is_symlink():
+        return True
+    is_junction = getattr(entry, "is_junction", None)  # Python 3.12+
+    if is_junction is not None and is_junction():
+        return True
+    tag = getattr(entry.stat(follow_symlinks=False), "st_reparse_tag", 0)
+    return tag in (_IO_REPARSE_TAG_MOUNT_POINT, _IO_REPARSE_TAG_SYMLINK)
+
+
+def iter_files(
+    root: Path, extensions: frozenset[str], errors: list[str] | None = None
+) -> Iterator[tuple[Path, os.stat_result]]:
+    """Yield (path, stat) for matching files without following symlinks/junctions.
+
+    Folders that cannot be listed are appended to ``errors`` so callers know the walk was incomplete.
+    """
     stack = [root]
     while stack:
         current = stack.pop()
@@ -122,6 +149,8 @@ def iter_files(root: Path, extensions: frozenset[str]) -> Iterator[tuple[Path, o
                 for entry in entries:
                     try:
                         if entry.is_dir(follow_symlinks=False):
+                            if _is_redirect(entry):
+                                continue
                             if entry.name.lower() not in SKIP_DIRS and not entry.name.startswith("~"):
                                 stack.append(Path(entry.path))
                             continue
@@ -137,6 +166,8 @@ def iter_files(root: Path, extensions: frozenset[str]) -> Iterator[tuple[Path, o
                         logger.warning("Cannot stat %s: %s", entry.path, exc)
         except OSError as exc:
             logger.warning("Cannot list %s: %s", current, exc)
+            if errors is not None:
+                errors.append(str(current))
 
 
 def _process(job: _Job, oda_converter: str | None, project_depth: int) -> FileRecord:
@@ -197,8 +228,6 @@ def scan(
     # None = auto-detect, "" = explicitly disabled.
     oda = find_oda_converter() if opts.oda_converter is None else (opts.oda_converter or None)
     report = ScanReport(oda_converter=oda)
-    started = time.monotonic()
-    submitted = 0
 
     executor: Executor
     if opts.use_processes and opts.workers > 1:
@@ -206,48 +235,108 @@ def scan(
     else:
         executor = ThreadPoolExecutor(max_workers=max(1, opts.workers))
 
+    run = _Run(pool, opts, oda, executor, report, progress, started=time.monotonic())
+    bases = [Path(b).expanduser().resolve() for b in opts.base_roots]
     try:
         for raw_root in roots:
             root = Path(raw_root).expanduser().resolve()
             if not root.is_dir():
-                raise NotADirectoryError(str(root))
+                # A missing or offline folder must not abort the other roots.
+                logger.warning("Data pool root is not a folder: %s", root)
+                report.missing_roots.append(str(root))
+                continue
             report.roots.append(str(root))
-            seen_paths: set[str] = set()
-            pending: list[Future[FileRecord]] = []
-            complete = True
-
-            for path, st in iter_files(root, opts.extensions):
-                if _out_of_budget(opts, submitted, started):
-                    report.stopped_early = True
-                    complete = False
-                    break
-                report.seen += 1
-                seen_paths.add(str(path))
-                if not stat.S_ISREG(st.st_mode):
-                    continue
-                if st.st_size > MAX_FILE_BYTES:
-                    report.skipped_large += 1
-                    continue
-                if not opts.force and pool.is_current(str(path), st.st_size, st.st_mtime):
-                    report.unchanged += 1
-                    continue
-                cloud = is_cloud_only(st) and not opts.hydrate
-                job = _Job(path, root, path.relative_to(root).as_posix(), st.st_size, st.st_mtime, cloud)
-                pending.append(executor.submit(_process, job, oda, opts.project_depth))
-                submitted += 1
-                if len(pending) >= opts.workers * 4:
-                    _drain(pool, pending, report, progress)
-                    pending = []
-
-            _drain(pool, pending, report, progress)
-            if opts.prune and complete:
-                with pool.transaction():
-                    report.pruned += pool.prune(str(root), seen_paths)
+            _scan_root(run, root, _base_for(root, bases))
+            if report.stopped_early:
+                break
     finally:
         executor.shutdown(wait=True, cancel_futures=True)
 
-    report.elapsed_seconds = round(time.monotonic() - started, 2)
+    report.elapsed_seconds = round(time.monotonic() - run.started, 2)
     return report
+
+
+@dataclass
+class _Run:
+    pool: DataPool
+    opts: ScanOptions
+    oda: str | None
+    executor: Executor
+    report: ScanReport
+    progress: Callable[[ScanReport, str], None] | None
+    started: float
+    submitted: int = 0
+
+
+def _scan_root(run: _Run, root: Path, base: Path) -> None:
+    """Walk one root, extract changed files and prune records of files that disappeared."""
+    opts, report = run.opts, run.report
+    seen_paths: set[str] = set()
+    pending: list[Future[FileRecord]] = []
+    complete = True
+    listing_errors: list[str] = []
+
+    for path, st in iter_files(root, opts.extensions, listing_errors):
+        if _out_of_budget(opts, run.submitted, run.started):
+            report.stopped_early = True
+            complete = False
+            break
+        report.seen += 1
+        seen_paths.add(str(path))
+        if not stat.S_ISREG(st.st_mode):
+            continue
+        if st.st_size > MAX_FILE_BYTES:
+            report.skipped_large += 1
+            continue
+        cloud = is_cloud_only(st) and not opts.hydrate
+        if not opts.force and _is_current(run.pool.stored_status(str(path), st.st_size, st.st_mtime), cloud, opts):
+            report.unchanged += 1
+            continue
+        job = _Job(path, base, path.relative_to(base).as_posix(), st.st_size, st.st_mtime, cloud)
+        try:
+            pending.append(run.executor.submit(_process, job, run.oda, opts.project_depth))
+        except BrokenExecutor as exc:
+            # A crashed worker process poisons the pool; stop cleanly and keep what was indexed.
+            logger.warning("Worker pool broke, stopping scan: %s", exc)
+            report.errors += 1
+            report.error_samples.append({"error": f"{type(exc).__name__}: {exc}"})
+            report.stopped_early = True
+            complete = False
+            break
+        run.submitted += 1
+        if len(pending) >= opts.workers * 4:
+            _drain(run.pool, pending, report, run.progress)
+            pending = []
+
+    _drain(run.pool, pending, report, run.progress)
+    if listing_errors:
+        # Files under an unreadable folder were not seen; pruning would delete them and their reviews.
+        report.unreadable_dirs += len(listing_errors)
+        complete = False
+    if opts.prune and complete:
+        with run.pool.transaction():
+            report.pruned += run.pool.prune(str(root), seen_paths)
+
+
+def _base_for(root: Path, bases: Sequence[Path]) -> Path:
+    """The deepest allowed root that contains ``root`` (``root`` itself when none does)."""
+    containing = [b for b in bases if b == root or b in root.parents]
+    return max(containing, key=lambda b: len(b.parts)) if containing else root
+
+
+def _is_current(status: str | None, cloud_only_now: bool, opts: ScanOptions) -> bool:
+    """Whether a stored record with matching size/mtime can be skipped.
+
+    "partial" and "cloud_only" records are skipped too, otherwise every call would re-process the same
+    files and ``max_files`` would never let the scan move past them.
+    """
+    if status is None:
+        return False
+    if status == "partial":
+        return not opts.retry_partial
+    if status == "cloud_only":
+        return cloud_only_now  # re-read once the file is available locally (or hydrate is on)
+    return True
 
 
 def _out_of_budget(opts: ScanOptions, submitted: int, started: float) -> bool:

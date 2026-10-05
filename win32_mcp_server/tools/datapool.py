@@ -82,6 +82,10 @@ _CATEGORY_SCHEMA = {"type": "string", "enum": ["", *CATEGORIES], "description": 
             "workers": {"type": "integer", "minimum": 1, "maximum": 16, "description": "Parallel workers"},
             "hydrate": {"type": "boolean", "description": "Download cloud-only OneDrive files to read them"},
             "force": {"type": "boolean", "description": "Re-extract files even if unchanged"},
+            "retry_partial": {
+                "type": "boolean",
+                "description": "Re-extract files indexed only partially (e.g. DWGs before ODA was installed)",
+            },
         },
     },
 )
@@ -96,6 +100,8 @@ async def handle_datapool_index(arguments: dict[str, Any]) -> dict[str, Any]:
         workers=get_int(arguments, "workers", default=ScanOptions().workers, min_value=1, max_value=16),
         hydrate=get_bool(arguments, "hydrate", default=False),
         force=get_bool(arguments, "force", default=False),
+        retry_partial=get_bool(arguments, "retry_partial", default=False),
+        base_roots=tuple(allowed_roots()),
         # Threads keep child processes away from the MCP stdio pipes.
         use_processes=False,
     )

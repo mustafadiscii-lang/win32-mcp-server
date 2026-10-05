@@ -134,8 +134,12 @@ def test_scan_search_annotate_roundtrip(archive: Path, tmp_path: Path) -> None:
         assert stats["reviewed"] == 1
 
         again = scan(pool, [archive], ScanOptions(workers=1, use_processes=False, oda_converter=""))
-        # Only the header-only DWG is "partial" and gets retried; everything else is unchanged.
-        assert again.unchanged == 4
+        # Unchanged files are skipped, including the header-only ("partial") DWG.
+        assert again.unchanged == 5
+        assert again.indexed == 0
+
+        retry = scan(pool, [archive], ScanOptions(workers=1, use_processes=False, oda_converter="", retry_partial=True))
+        assert retry.indexed == 1  # only the partial DWG is re-extracted
 
         (archive / "Teklifler" / "2024_otel_sunumu.pptx").unlink()
         third = scan(pool, [archive], ScanOptions(workers=1, use_processes=False, oda_converter=""))
@@ -167,3 +171,97 @@ def test_cli_index_uses_configured_roots(
     db = str(tmp_path / "env.sqlite")
     assert cli_main(["--db", db, "index", "--workers", "1", "-q"]) == 0
     assert '"indexed": 5' in capsys.readouterr().out
+
+
+def test_max_files_moves_past_partial_files(tmp_path: Path) -> None:
+    root = tmp_path / "arsiv"
+    root.mkdir()
+    for idx in range(5):
+        (root / f"plan_{idx}.dwg").write_bytes(b"AC1032" + b"\x00" * 64)
+    (root / "notlar.txt").write_text("santiye notu", encoding="utf-8")
+    opts = ScanOptions(workers=1, use_processes=False, max_files=3, oda_converter="")
+    with DataPool(tmp_path / "pool.sqlite") as pool:
+        reports = [scan(pool, [root], opts) for _ in range(3)]
+        assert [r.stopped_early for r in reports] == [True, False, False]
+        assert pool.stats()["files"] == 6
+        assert pool.search("santiye")
+
+
+def test_unreadable_folder_does_not_prune(archive: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import os
+
+    opts = ScanOptions(workers=1, use_processes=False, oda_converter="")
+    with DataPool(tmp_path / "pool.sqlite") as pool:
+        scan(pool, [archive], opts)
+        etut = pool.search("sondaj")[0]
+        with pool.transaction():
+            pool.annotate(etut["id"], summary="incelendi")
+
+        real_scandir = os.scandir
+        blocked = str(archive / "Deniz Konutlari" / "Zemin Etüdü")
+
+        def flaky_scandir(path: object) -> object:
+            if str(path) == blocked:
+                raise PermissionError(13, "Erisim engellendi", blocked)
+            return real_scandir(path)  # type: ignore[arg-type]
+
+        monkeypatch.setattr(os, "scandir", flaky_scandir)
+        report = scan(pool, [archive], opts)
+        assert report.unreadable_dirs == 1
+        assert report.pruned == 0
+        assert pool.get(etut["id"])["summary"] == "incelendi"  # type: ignore[index]
+
+
+def test_subfolder_scan_uses_allowed_root(archive: Path, tmp_path: Path) -> None:
+    sub = archive / "Deniz Konutlari"
+    opts = ScanOptions(workers=1, use_processes=False, oda_converter="", base_roots=(archive,))
+    with DataPool(tmp_path / "pool.sqlite") as pool:
+        scan(pool, [archive], opts)
+        before = {r["project"] for r in pool.export_rows()}
+        report = scan(
+            pool,
+            [sub],
+            ScanOptions(workers=1, use_processes=False, oda_converter="", base_roots=(archive,), force=True),
+        )
+        assert report.pruned == 0
+        assert {r["project"] for r in pool.export_rows()} == before
+        assert pool.search("sondaj")[0]["project"] == "Deniz Konutlari"
+
+        (sub / "olcum_noktalari.csv").unlink()
+        (archive / "Teklifler" / "2024_otel_sunumu.pptx").unlink()
+        pruned = scan(pool, [sub], opts)
+        # Only the scanned sub-folder is pruned; the deleted file elsewhere waits for a full scan.
+        assert pruned.pruned == 1
+        assert pool.search("bedel")
+
+
+def test_missing_root_does_not_abort(archive: Path, tmp_path: Path) -> None:
+    with DataPool(tmp_path / "pool.sqlite") as pool:
+        report = scan(pool, [tmp_path / "yok", archive], ScanOptions(workers=1, use_processes=False, oda_converter=""))
+        assert report.missing_roots == [str((tmp_path / "yok").resolve())]
+        assert report.indexed == 5
+
+
+def test_symlinked_folder_is_not_followed(archive: Path, tmp_path: Path) -> None:
+    outside = tmp_path / "disarida"
+    outside.mkdir()
+    (outside / "gizli.txt").write_text("gizli belge", encoding="utf-8")
+    try:
+        (archive / "baglanti").symlink_to(outside, target_is_directory=True)
+    except OSError:
+        pytest.skip("symlinks not available")
+    with DataPool(tmp_path / "pool.sqlite") as pool:
+        scan(pool, [archive], ScanOptions(workers=1, use_processes=False, oda_converter=""))
+        assert not pool.search("gizli")
+
+
+def test_pptx_total_size_cap(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from win32_mcp_server.datapool import extractors
+
+    path = tmp_path / "buyuk.pptx"
+    _write_pptx(path, ["Birinci", "Ikinci", "Ucuncu"])
+    monkeypatch.setattr(extractors, "MAX_ZIP_TOTAL_BYTES", 120)
+    result = extract(path)
+    assert "Birinci" in result.text
+    assert "Ucuncu" not in result.text
+    assert "boyut siniri" in result.text

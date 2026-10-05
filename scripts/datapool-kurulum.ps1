@@ -29,7 +29,7 @@ param(
     [switch]$SkipClaude,
     [switch]$SkipSchedule,
     [switch]$ForceClaudeConfig,
-    [string]$Source = "git+https://github.com/mustafadiscii-lang/win32-mcp-server.git@claude/relaxed-curie-a0gfjy",
+    [string]$Source = "git+https://github.com/mustafadiscii-lang/win32-mcp-server.git",
     [string]$TaskTime = "02:00"
 )
 
@@ -68,10 +68,10 @@ $userScriptsDir = (& $python @pythonArgs -c "import sysconfig; print(sysconfig.g
 $datapoolExe = $null
 $serverExe = $null
 foreach ($dir in @($scriptsDir, $userScriptsDir)) {
-    if (-not $datapoolExe -and (Test-Path (Join-Path $dir "win32-mcp-datapool.exe"))) {
+    if (-not $datapoolExe -and (Test-Path -LiteralPath (Join-Path $dir "win32-mcp-datapool.exe"))) {
         $datapoolExe = Join-Path $dir "win32-mcp-datapool.exe"
     }
-    if (-not $serverExe -and (Test-Path (Join-Path $dir "win32-mcp-server.exe"))) {
+    if (-not $serverExe -and (Test-Path -LiteralPath (Join-Path $dir "win32-mcp-server.exe"))) {
         $serverExe = Join-Path $dir "win32-mcp-server.exe"
     }
 }
@@ -87,15 +87,15 @@ Write-Step "Taranacak klasorler belirleniyor"
 if ($Roots.Count -eq 0) {
     foreach ($var in @("OneDriveCommercial", "OneDriveConsumer", "OneDrive")) {
         $value = [Environment]::GetEnvironmentVariable($var)
-        if ($value -and (Test-Path $value) -and ($Roots -notcontains $value)) { $Roots += $value }
+        if ($value -and (Test-Path -LiteralPath $value) -and ($Roots -notcontains $value)) { $Roots += $value }
     }
 }
 if ($Roots.Count -eq 0) { throw "OneDrive klasoru bulunamadi. -Roots ile klasor verin." }
 foreach ($root in $Roots) {
-    if (-not (Test-Path $root -PathType Container)) { throw "Klasor yok: $root" }
+    if (-not (Test-Path -LiteralPath $root -PathType Container)) { throw "Klasor yok: $root" }
     Write-Ok $root
 }
-$rootsValue = ($Roots | ForEach-Object { (Resolve-Path $_).Path }) -join ";"
+$rootsValue = ($Roots | ForEach-Object { (Resolve-Path -LiteralPath $_).Path }) -join ";"
 [Environment]::SetEnvironmentVariable("WIN32_MCP_DATAPOOL_ROOTS", $rootsValue, "User")
 $env:WIN32_MCP_DATAPOOL_ROOTS = $rootsValue
 Write-Ok "WIN32_MCP_DATAPOOL_ROOTS kullanici degiskenine yazildi"
@@ -128,10 +128,10 @@ if (-not $SkipClaude) {
     Write-Step "Claude Desktop MCP ayari"
     $configDir = Join-Path $env:APPDATA "Claude"
     $configPath = Join-Path $configDir "claude_desktop_config.json"
-    if (-not (Test-Path $configDir)) { New-Item -ItemType Directory -Path $configDir | Out-Null }
+    if (-not (Test-Path -LiteralPath $configDir)) { New-Item -ItemType Directory -Path $configDir | Out-Null }
 
     $config = [pscustomobject]@{}
-    if (Test-Path $configPath) {
+    if (Test-Path -LiteralPath $configPath) {
         $raw = [IO.File]::ReadAllText($configPath)
         if ($raw.Trim()) { $config = $raw | ConvertFrom-Json }
         $backup = "$configPath.yedek-$(Get-Date -Format yyyyMMdd-HHmmss)"
