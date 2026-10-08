@@ -3,6 +3,7 @@
 from . import (
     capture,
     clipboard,
+    datapool,
     keyboard,
     mouse,
     ocr,

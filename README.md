@@ -1,6 +1,6 @@
 # Win32 MCP Server
 
-**Enterprise-grade Windows automation for AI agents — 53 tools over MCP**
+**Enterprise-grade Windows automation for AI agents — 60 tools over MCP**
 
 The most comprehensive Windows desktop automation server for the [Model Context Protocol](https://modelcontextprotocol.io/). Give any MCP-compatible AI agent full control over Windows applications: intelligent text finding and clicking, structured OCR, screenshot capture, mouse/keyboard input, window management, process control, and multi-step batch operations — all through a single MCP server.
 
@@ -93,6 +93,18 @@ The most comprehensive Windows desktop automation server for the [Model Context 
 - `uia_get_control_value` — read a control's value or text
 - `uia_set_control_value` — set a control's value (edit boxes, etc.)
 - `uia_get_focused` — get info about the currently focused control
+
+### Data Pool (7 tools)
+Index a local/OneDrive project archive (DWG/DXF drawings, PDFs, Office files, survey data) into a
+local SQLite full-text pool that agents can search and annotate. Install with
+`pip install "win32-mcp-server[datapool]"`; DWG content needs the free ODA File Converter.
+Also ships a `win32-mcp-datapool` CLI (`index`, `search`, `show`, `stats`, `projects`, `export`).
+See [docs/DATAPOOL.md](docs/DATAPOOL.md) (Turkish).
+
+- `datapool_index` — incremental, parallel scan of allowed roots (`WIN32_MCP_DATAPOOL_ROOTS`, default OneDrive)
+- `datapool_search` / `datapool_get` — full-text search and full record (layers, title block, text)
+- `datapool_stats` / `datapool_projects` — totals and per-project summaries
+- `datapool_pending_reviews` / `datapool_annotate` — agent review queue and saved reviews
 
 ---
 
@@ -244,7 +256,7 @@ Set these in your MCP client's server environment when you need production contr
 
 ---
 
-## All 53 Tools
+## All 60 Tools
 
 ### Smart Automation
 | Tool | Description |
@@ -338,6 +350,17 @@ Set these in your MCP client's server environment when you need production contr
 | `uia_get_control_value` | Read a control's value/text |
 | `uia_set_control_value` | Set a control's value |
 | `uia_get_focused` | Get info about the focused control |
+
+### Data Pool
+| Tool | Description |
+|------|-------------|
+| `datapool_index` | Incremental scan of the allowed roots into the local pool |
+| `datapool_stats` | Totals by category, extension and status |
+| `datapool_projects` | Per-project file, drawing, etüt, teklif and veri counts |
+| `datapool_search` | Full-text search with category / project / extension filters |
+| `datapool_get` | One record: metadata, extracted text and agent review |
+| `datapool_pending_reviews` | Files no agent has reviewed yet |
+| `datapool_annotate` | Save an agent's summary, tags and category for a file |
 
 ---
 

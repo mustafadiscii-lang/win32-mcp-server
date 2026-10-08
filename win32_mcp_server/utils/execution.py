@@ -52,6 +52,12 @@ def estimate_timeout_seconds(tool_name: str, arguments: dict[str, Any]) -> float
                     delay_total += min(float(step.get("delay_ms", 0) or 0), 30_000) / 1000.0
         return min(max_runtime, max(config.default_timeout, delay_total + (len(steps) * config.default_timeout) + 5.0))
 
+    if tool_name == "datapool_index":
+        # The scan enforces its own time budget; leave headroom for the final DB commit.
+        budget = arguments.get("time_budget_seconds", 120)
+        budget_float = float(budget) if isinstance(budget, int | float) and not isinstance(budget, bool) else 120.0
+        return min(max_runtime, budget_float + 25.0)
+
     requested = arguments.get("timeout_seconds", config.default_timeout)
     try:
         requested_float = float(requested)
