@@ -61,6 +61,10 @@ kurarsanız sonraki taramada bu dosyalar kendiliğinden yeniden işlenir. Başka
 kalan dosyalar (kilitli dosya, ODA zaman aşımı, indirilemeyen OneDrive dosyası) 24 saatte bir
 yeniden denenir; arada yapılan taramalar onları atlar.
 
+MCP aracında (`datapool_index`) her çağrının bir süre bütçesi vardır. Okunması bu bütçeyi aşan
+bir dosya (bozuk PDF, çok büyük DXF) taramayı kilitlemez: çağrı en geç bütçe + 20 saniyede
+döner, o dosya `partial` olarak işaretlenir ve 24 saat sonra yeniden denenir.
+
 DWG'ler kopyalanarak dönüştürülür. OneDrive'daki asıl dosyaya dokunulmaz ve dosya kilitlenmez.
 
 ## 2. İlk indeksleme

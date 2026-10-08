@@ -311,3 +311,44 @@ def test_records_from_another_root_are_refreshed(archive: Path, tmp_path: Path) 
         report = scan(pool, [sub], ScanOptions(workers=1, use_processes=False, oda_converter="", base_roots=(archive,)))
         assert report.unchanged == 0
         assert pool.search("sondaj")[0]["project"] == "Deniz Konutlari"
+
+
+def test_slow_file_does_not_block_scan(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import threading
+    import time
+
+    from win32_mcp_server.datapool import scanner
+
+    root = tmp_path / "arsiv"
+    root.mkdir()
+    (root / "a_yavas.txt").write_text("yavas dosya", encoding="utf-8")
+    (root / "b_hizli.txt").write_text("hizli dosya", encoding="utf-8")
+    release = threading.Event()
+    real_extract = scanner.extract
+
+    def slow_extract(path: Path, **kwargs: object) -> object:
+        if path.name.startswith("a_"):
+            release.wait(10)
+        return real_extract(path, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(scanner, "extract", slow_extract)
+    monkeypatch.setattr(scanner, "DRAIN_GRACE_SECONDS", 0.5)
+    opts = ScanOptions(workers=1, use_processes=False, oda_converter="", time_budget_seconds=1)
+    with DataPool(tmp_path / "pool.sqlite") as pool:
+        started = time.monotonic()
+        report = scan(pool, [root], opts)
+        assert time.monotonic() - started < 5
+        assert report.stopped_early
+        assert report.pruned == 0
+        slow = pool.stored_state(str(root / "a_yavas.txt"), 11, (root / "a_yavas.txt").stat().st_mtime)
+        assert slow is not None
+        assert slow.status == "partial"
+        assert slow.error == scanner.TIMEOUT_ERROR
+        release.set()
+        again = scan(pool, [root], opts)
+        assert again.indexed + again.unchanged == 2  # the fast file is indexed once, whatever the walk order
+        assert again.stopped_early is False  # the timed-out file is skipped for 24 hours, not retried
+        assert pool.search("hizli")
+        slow_rec = pool.get(pool.search("yavas")[0]["id"])
+        assert slow_rec is not None
+        assert slow_rec["status"] == "partial"  # name indexed, content not read

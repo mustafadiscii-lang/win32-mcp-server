@@ -7,6 +7,7 @@ import os
 import stat
 import time
 from concurrent.futures import BrokenExecutor, Executor, Future, ProcessPoolExecutor, ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FuturesTimeout
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -40,6 +41,9 @@ MAX_FILE_BYTES = 500 * 1024 * 1024
 # Partial extractions caused by something other than a missing converter (locked file, ODA timeout,
 # offline OneDrive file...) may be temporary; retry them after this long.
 PARTIAL_RETRY_SECONDS = 24 * 3600
+# Extra time a call waits for running extractions after its time budget before giving up on them.
+DRAIN_GRACE_SECONDS = 20.0
+TIMEOUT_ERROR = "Dosya okuma zaman asimina ugradi; 24 saat sonra yeniden denenecek"
 
 # Windows file attributes set on OneDrive "files on demand" placeholders.
 _FILE_ATTRIBUTE_OFFLINE = 0x1000
@@ -174,27 +178,33 @@ def iter_files(
                 errors.append(str(current))
 
 
+def _placeholder(job: _Job, project_depth: int, status: str, error: str = "") -> FileRecord:
+    """A record without extracted content (cloud-only file, or an extraction that timed out)."""
+    ext = job.path.suffix.lower()
+    category, _ = classify(job.rel_path, ext)
+    return FileRecord(
+        path=str(job.path),
+        root=str(job.root),
+        rel_path=job.rel_path,
+        name=job.path.name,
+        ext=ext,
+        size=job.size,
+        mtime=job.mtime,
+        category=category,
+        project=project_key(job.rel_path, project_depth),
+        doc_type=ext.lstrip("."),
+        status=status,
+        error=error,
+        meta={},
+        text="",
+    )
+
+
 def _process(job: _Job, oda_converter: str | None, project_depth: int) -> FileRecord:
     """Worker body — runs in a separate process, so it only takes/returns picklable data."""
     ext = job.path.suffix.lower()
     if job.cloud_only:
-        category, _ = classify(job.rel_path, ext)
-        return FileRecord(
-            path=str(job.path),
-            root=str(job.root),
-            rel_path=job.rel_path,
-            name=job.path.name,
-            ext=ext,
-            size=job.size,
-            mtime=job.mtime,
-            category=category,
-            project=project_key(job.rel_path, project_depth),
-            doc_type=ext.lstrip("."),
-            status="cloud_only",
-            error="",
-            meta={},
-            text="",
-        )
+        return _placeholder(job, project_depth, "cloud_only")
 
     result = extract(job.path, oda_converter=oda_converter)
     category, scores = classify(job.rel_path, ext, result.text)
@@ -239,7 +249,9 @@ def scan(
     else:
         executor = ThreadPoolExecutor(max_workers=max(1, opts.workers))
 
-    run = _Run(pool, opts, oda, executor, report, progress, started=time.monotonic())
+    started = time.monotonic()
+    deadline = started + opts.time_budget_seconds + DRAIN_GRACE_SECONDS if opts.time_budget_seconds else None
+    run = _Run(pool, opts, oda, executor, report, progress, started=started, deadline=deadline)
     bases = [Path(b).expanduser().resolve() for b in opts.base_roots]
     try:
         for raw_root in roots:
@@ -254,7 +266,8 @@ def scan(
             if report.stopped_early:
                 break
     finally:
-        executor.shutdown(wait=True, cancel_futures=True)
+        # Do not block on a worker stuck in a pathological file; it finishes (and is discarded) later.
+        executor.shutdown(wait=not run.abandoned, cancel_futures=True)
 
     report.elapsed_seconds = round(time.monotonic() - run.started, 2)
     return report
@@ -270,18 +283,22 @@ class _Run:
     progress: Callable[[ScanReport, str], None] | None
     started: float
     submitted: int = 0
+    # Wall-clock limit for waiting on workers (time budget + grace); None = wait as long as needed.
+    deadline: float | None = None
+    # Set when a worker was left running past the deadline; the executor is then not joined.
+    abandoned: bool = False
 
 
 def _scan_root(run: _Run, root: Path, bases: Sequence[Path]) -> None:
     """Walk one root, extract changed files and prune records of files that disappeared."""
     opts, report = run.opts, run.report
     seen_paths: set[str] = set()
-    pending: list[Future[FileRecord]] = []
+    pending: list[tuple[Future[FileRecord], _Job]] = []
     complete = True
     listing_errors: list[str] = []
 
     for path, st in iter_files(root, opts.extensions, listing_errors):
-        if _out_of_budget(opts, run.submitted, run.started):
+        if report.stopped_early or _out_of_budget(opts, run.submitted, run.started):
             report.stopped_early = True
             complete = False
             break
@@ -300,7 +317,7 @@ def _scan_root(run: _Run, root: Path, bases: Sequence[Path]) -> None:
             continue
         job = _Job(path, base, path.relative_to(base).as_posix(), st.st_size, st.st_mtime, cloud)
         try:
-            pending.append(run.executor.submit(_process, job, run.oda, opts.project_depth))
+            pending.append((run.executor.submit(_process, job, run.oda, opts.project_depth), job))
         except BrokenExecutor as exc:
             # A crashed worker process poisons the pool; stop cleanly and keep what was indexed.
             logger.warning("Worker pool broke, stopping scan: %s", exc)
@@ -311,10 +328,12 @@ def _scan_root(run: _Run, root: Path, bases: Sequence[Path]) -> None:
             break
         run.submitted += 1
         if len(pending) >= opts.workers * 4:
-            _drain(run.pool, pending, report, run.progress)
+            _drain(run, pending)
             pending = []
 
-    _drain(run.pool, pending, report, run.progress)
+    _drain(run, pending)
+    if report.stopped_early:
+        complete = False  # a worker timed out: files after it were never extracted
     if listing_errors:
         # Files under an unreadable folder were not seen; pruning would delete them and their reviews.
         report.unreadable_dirs += len(listing_errors)
@@ -357,20 +376,25 @@ def _out_of_budget(opts: ScanOptions, submitted: int, started: float) -> bool:
     return bool(opts.time_budget_seconds and time.monotonic() - started >= opts.time_budget_seconds)
 
 
-def _drain(
-    pool: DataPool,
-    futures: list[Future[FileRecord]],
-    report: ScanReport,
-    progress: Callable[[ScanReport, str], None] | None,
-) -> None:
-    if not futures:
+def _drain(run: _Run, pending: list[tuple[Future[FileRecord], _Job]]) -> None:
+    if not pending:
         return
+    pool, report, progress = run.pool, run.report, run.progress
     # Wait for every worker before opening the write transaction, so other connections (e.g. an
     # agent annotating a file) are not blocked while slow extractions run.
     records: list[FileRecord] = []
-    for fut in futures:
+    for fut, job in pending:
+        timeout = None if run.deadline is None else max(0.0, run.deadline - time.monotonic())
         try:
-            records.append(fut.result())
+            records.append(fut.result(timeout=timeout))
+        except FuturesTimeout:
+            # A file that blows the time budget is stored as partial, so the next calls skip it for
+            # PARTIAL_RETRY_SECONDS instead of getting stuck on it again.
+            report.stopped_early = True
+            if fut.cancel():
+                continue  # never started: the next call picks the file up normally
+            run.abandoned = True
+            records.append(_placeholder(job, run.opts.project_depth, "partial", TIMEOUT_ERROR))
         except Exception as exc:
             report.errors += 1
             if len(report.error_samples) < 20:
